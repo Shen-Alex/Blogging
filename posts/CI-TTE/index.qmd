@@ -1,0 +1,113 @@
+---
+title: "TTE Confidence Interval for Single Arm Trial"
+author: "Alex Shen"
+date: "2023-12-07"
+categories: [Trial Design, code]
+image: "image.jpg"
+format:
+  html:
+    code-fold: true
+    toc: true
+    number-sections: true
+---
+
+## Introduction
+
+As a statistician, you might be asked by a physician what is the confidence interval of a time to event endpoint looks like when you are trying to design a single arm trial, assuming appropriate median survival parameter, recruitment and additional follow up time, and certain level of drop out.
+
+Below is an example
+
+## Median for one trial
+
+Load required library
+
+```{r}
+#| label: load-library
+#| message: false
+#| warning: false
+library(survival)
+library(tidyverse)
+library(echarts4r)
+library(gt)
+```
+
+Simulate a single arm time to event trial and calculate the median survival
+
+```{r}
+#| label: Median-for-one trial
+get.ci.tte <- function(ss=200, median.TTE=6, drop.rate=0.15,recruit=12,foll.up=6){
+  #ss<-200
+  #median.TTE=6
+  # drop.rate=0.15 
+  # recruit=12
+  # foll.up=6
+  t <- rexp(ss, rate = log(2)/median.TTE)     # simulate events data based on median TTE
+  c <- rexp(ss, rate = -log(1-drop.rate)/(recruit/2+foll.up)) # generate lost ot followu up with median exposure time
+  time = pmin(t,c)                    # choose the short time by comparing t and c
+  cens <-ifelse(c<t, 0, 1)            # If lost to follow up is early than the events,then set it as censor
+  a <-runif(ss, min=0, max = recruit)      # simulate uniform accrual time
+  total.time <- a+time
+  analysis.cut =  recruit+foll.up                   
+  Events <-ifelse(total.time>analysis.cut, 0, cens) # if the above events or censor is later than analysis cut off, then set it to censor
+  TTE <-ifelse(total.time>analysis.cut, analysis.cut-a, time) #time adjust due to administrative censoring
+  data <- data.frame(a, t, c, time, cens, total.time, TTE, Events)
+  kmfit <- survfit(Surv(TTE, Events)~1)  
+  unname(summary(kmfit)$table)[7]
+  }
+```
+
+## Median for N trials
+
+We can do the simulation N number of times, each with a median survival calculated. Confidence interval of the median can be derived by extracting the 2.5 and 97.5 percentile.
+
+This procedure of confidence interval derivation can be replicated for different sample size. As you might expected, the larger the sample size, the more precise the confidence interval will be.
+
+@tbl-CI shows confidence interval versus sample size
+
+```{r}
+#| label: tbl-CI
+#| tbl-cap: Confidence interval versus sample size
+
+N=10^2       #How many trials to simulate
+set.seed(20231120)
+samp_vector <- seq(100,500,25)
+lower.bound <- rep(0,length(samp_vector))
+tte.median <- rep(0,length(samp_vector))
+upper.bound <- rep(0,length(samp_vector))
+
+# loop for different sample size
+for (i in 1:length(samp_vector)){
+  simulated.median <- replicate(N,get.ci.tte(ss=samp_vector[i], median.TTE=6, drop.rate=0.15,recruit=12,foll.up=6)) # N median calculated out of N trials
+  lower.bound[i] <- quantile(simulated.median,0.025)
+  tte.median[i] <- quantile(simulated.median,0.5)
+  upper.bound[i] <- quantile(simulated.median,0.975)
+}
+
+results <- data.frame(samp_vector, lower.bound = round(lower.bound,digits=2), tte.median=round(tte.median,digits=2), upper.bound=round(upper.bound,digits=2))
+
+results %>% 
+  gt()
+```
+
+## Confidence interval over sample size plotted
+
+@fig-CI-graph shows the relationship between confidence interval versus sample size
+
+```{r}
+#| label: fig-CI-graph
+#| fig-cap: Precision of confidence interval over sample size
+#| fig-width: 5
+#| fig-asp: 0.618
+#| echo: fenced
+
+results %>% 
+  e_charts(x = samp_vector) %>% 
+  e_line(serie= upper.bound) %>%  
+  e_line(serie= tte.median) %>% 
+  e_line(serie= lower.bound) %>% 
+  e_tooltip(trigger = "axis") %>% 
+  e_axis_labels(x = "Sample size", y = "TTP with 95% CI") %>% 
+  e_y_axis(min = 3) %>% 
+  e_x_axis(min = min(samp_vector), max = max(samp_vector),nameLocation = "center",nameGap = 30) %>% 
+  e_legend(show =F)
+```
